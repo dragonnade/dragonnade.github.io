@@ -1,0 +1,266 @@
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import React, { useState, useEffect } from 'react';
+import { ArrowUpDown, MessageSquare } from 'lucide-react';
+
+const OrderBrowser = () => {
+  const [orders, setOrders] = useState([]);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [articles, setArticles] = useState([]);
+  const [selectedArticle, setSelectedArticle] = useState(null);
+  const [similarities, setSimilarities] = useState([]);
+  const [sortConfig, setSortConfig] = useState({ key: 'similarity', direction: 'desc' });
+  const [filters, setFilters] = useState({
+    category: '',
+    minSimilarity: 0,
+    yearLimit: 0,
+    minWordCount: 0,
+    maxWordCount: Infinity
+  });
+  const [comments, setComments] = useState({});
+
+  const fetchOrders = async () => {
+    try {
+      const response = await fetch('http://localhost:3000/api/orders');
+      if (!response.ok) throw new Error('Failed to fetch orders');
+      const data = await response.json();
+      setOrders(data);
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+    }
+  };
+  
+  const fetchArticles = async (orderId) => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/articles/${orderId}`);
+      if (!response.ok) throw new Error('Failed to fetch articles');
+      const data = await response.json();
+      setArticles(data);
+    } catch (error) {
+      console.error('Error fetching articles:', error);
+    }
+  };
+  
+  const fetchSimilarities = async (articleId) => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/similarities/${articleId}`);
+      if (!response.ok) throw new Error('Failed to fetch similarities');
+      const data = await response.json();
+      setSimilarities(data);
+    } catch (error) {
+      console.error('Error fetching similarities:', error);
+    }
+  };
+
+  useEffect(() => {
+    // Fetch orders grouped by year
+    fetchOrders();
+  }, []);
+
+  useEffect(() => {
+    if (selectedOrder) {
+      fetchArticles(selectedOrder);
+    }
+  }, [selectedOrder]);
+
+  useEffect(() => {
+    if (selectedArticle) {
+      fetchSimilarities(selectedArticle);
+    }
+  }, [selectedArticle]);
+
+  const handleSort = (key) => {
+    setSortConfig({
+      key,
+      direction: sortConfig.key === key && sortConfig.direction === 'desc' ? 'asc' : 'desc'
+    });
+  };
+
+  const sortedSimilarities = similarities
+    .filter(item => {
+      return (
+        (!filters.category || item.category === filters.category) &&
+        (item.similarity >= filters.minSimilarity) &&
+        (!filters.yearLimit || parseInt(item.year) >= new Date().getFullYear() - filters.yearLimit) &&
+        (item.wordCount >= filters.minWordCount) &&
+        (item.wordCount <= filters.maxWordCount)
+      );
+    })
+    .sort((a, b) => {
+      const direction = sortConfig.direction === 'desc' ? -1 : 1;
+      if (sortConfig.key === 'similarity') {
+        return direction * (a.similarity - b.similarity);
+      }
+      if (sortConfig.key === 'date') {
+        return direction * (a.orderId - b.orderId);
+      }
+      return 0;
+    });
+
+  return (
+    <div className="p-4 max-w-6xl mx-auto space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Order Browser</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Order Selection */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Select Order</label>
+            <Select onValueChange={setSelectedOrder} value={selectedOrder}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select an order..." />
+              </SelectTrigger>
+              <SelectContent>
+                {orders.map(yearGroup => (
+                  <div key={yearGroup.year} className="py-2">
+                    <div className="px-2 text-sm font-bold text-gray-500">{yearGroup.year}</div>
+                    {yearGroup.orders.map(order => (
+                      <SelectItem key={order.id} value={order.id}>
+                        {order.name}
+                      </SelectItem>
+                    ))}
+                  </div>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Article Selection */}
+          {selectedOrder && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Select Article</label>
+              <Select onValueChange={setSelectedArticle} value={selectedArticle}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select an article..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {articles.map(article => (
+                    <SelectItem key={article.id} value={article.id}>
+                      {article.number} - {article.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Filters */}
+          {selectedArticle && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-medium">Category</label>
+                <Select 
+                  onValueChange={(value) => setFilters({...filters, category: value})}
+                  value={filters.category}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="All categories" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">All</SelectItem>
+                    <SelectItem value="Administrative">Administrative</SelectItem>
+                    <SelectItem value="Infrastructure">Infrastructure</SelectItem>
+                    <SelectItem value="Rights">Rights</SelectItem>
+                    <SelectItem value="Environmental">Environmental</SelectItem>
+                    <SelectItem value="Operation">Operation</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Min Similarity %</label>
+                <Input 
+                  type="number" 
+                  min="0" 
+                  max="100"
+                  value={filters.minSimilarity}
+                  onChange={(e) => setFilters({...filters, minSimilarity: parseFloat(e.target.value)})}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Similar Articles */}
+          {selectedArticle && (
+            <div className="space-y-4">
+              <div className="flex justify-between">
+                <h3 className="text-lg font-semibold">Similar Articles</h3>
+                <div className="space-x-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleSort('similarity')}
+                  >
+                    Similarity <ArrowUpDown className="ml-2 h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleSort('date')}
+                  >
+                    Date <ArrowUpDown className="ml-2 h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {sortedSimilarities.map(item => (
+                  <Card key={item.id} className="p-4">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-medium">
+                          {item.orderName} - Article {item.articleNumber}
+                        </div>
+                        <div className="text-sm text-gray-500">{item.articleTitle}</div>
+                        <div className="mt-2 text-sm">{item.firstParagraph}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-lg">
+                          {item.similarity.toFixed(2)}%
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            const newComments = { ...comments };
+                            newComments[item.id] = newComments[item.id] || '';
+                            setComments(newComments);
+                          }}
+                        >
+                          <MessageSquare className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    {comments[item.id] !== undefined && (
+                      <div className="mt-4">
+                        <Input
+                          value={comments[item.id]}
+                          onChange={(e) => {
+                            const newComments = { ...comments };
+                            newComments[item.id] = e.target.value;
+                            setComments(newComments);
+                          }}
+                          placeholder="Add a comment..."
+                        />
+                      </div>
+                    )}
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+export default OrderBrowser;

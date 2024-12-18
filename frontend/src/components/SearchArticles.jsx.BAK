@@ -1,0 +1,125 @@
+import React, { useState, useEffect } from 'react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { ScrollArea } from './ui/scroll-area';
+
+
+const truncateToWord = (text, targetLength) => {
+    if (!text || text.length <= targetLength) return text;
+    
+    const truncated = text.substr(0, targetLength).split(' ');
+    truncated.pop(); // Remove last (potentially partial) word
+    return truncated.join(' ') + '...';
+};
+
+
+const SearchArticles = () => {
+  const [articles, setArticles] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedArticles, setSelectedArticles] = useState(new Set());
+
+  useEffect(() => {
+    const fetchArticles = async () => {
+      try {
+        const response = await fetch('http://localhost:3000/api/article-titles');
+        if (!response.ok) throw new Error('Failed to fetch articles');
+        const data = await response.json();
+        setArticles(data);
+      } catch (error) {
+        console.error('Error fetching articles:', error);
+      }
+    };
+    fetchArticles();
+  }, []);
+
+  
+  const handleArticleClick = (articleId, event) => {
+    setSelectedArticles(prev => {
+      const newSelection = new Set(prev);
+      if (event.ctrlKey) {
+        if (newSelection.has(articleId)) {
+          newSelection.delete(articleId);
+        } else {
+          newSelection.add(articleId);
+        }
+      } else {
+        newSelection.clear();
+        newSelection.add(articleId);
+      }
+      return newSelection;
+    });
+  };
+
+  const filteredArticles = articles
+    .filter(article =>
+      article.article_title.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+  const groupedArticles = filteredArticles.reduce((acc, article) => {
+    const year = article.order_year;
+    if (!acc[year]) {
+      acc[year] = [];
+    }
+    acc[year].push(article);
+    return acc;
+  }, {});
+
+  const sortedYears = Object.keys(groupedArticles).sort((a, b) => b - a);
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-8">
+      <div className="max-w-4xl mx-auto">
+        <Card>
+          <CardHeader>
+            <CardTitle>Search Articles</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Input
+              placeholder="Search article titles..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="mb-4"
+            />
+            <ScrollArea className="h-[600px] rounded-md border p-4">
+              <div className="space-y-6">
+                {sortedYears.map(year => (
+                  <div key={year} className="space-y-2">
+                    <h3 className="text-lg font-semibold sticky top-0 bg-white py-2 z-10">
+                      {year}
+                    </h3>
+                    {groupedArticles[year].map(article => (
+                      <div
+                        key={article.article_id}
+                        onClick={(e) => handleArticleClick(article.article_id, e)}
+                        className={`p-3 rounded-lg cursor-pointer ${
+                          selectedArticles.has(article.article_id)
+                            ? 'bg-blue-100 hover:bg-blue-200'
+                            : 'hover:bg-gray-100'
+                        }`}
+                      >
+                        <div className="font-medium">
+                          Article {article.article_number} - {article.article_title}
+                        </div>
+                        <div className="text-m text-gray-500">
+                          {article.order_name}
+                        </div>
+                        <div className="mt-2 text-sm text-gray-600">
+                          {truncateToWord(article.first_paragraph, 100)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+            <div className="text-sm text-gray-500">
+              {selectedArticles.size} article{selectedArticles.size !== 1 ? 's' : ''} selected
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+export default SearchArticles;
