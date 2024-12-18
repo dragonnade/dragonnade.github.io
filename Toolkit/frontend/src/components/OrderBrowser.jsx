@@ -1,9 +1,20 @@
 import React, { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ArrowUpDown, MessageSquare, Search } from 'lucide-react';
 import RedlineComparison from './RedlineComparison';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 const OrderBrowser = () => {
   const [orders, setOrders] = useState([]);
@@ -18,35 +29,101 @@ const OrderBrowser = () => {
   const [comments, setComments] = useState({});
   const [selectedComparisonArticles, setSelectedComparisonArticles] = useState(new Set());
   const [showComparison, setShowComparison] = useState(false);
+  const [commentDialogs, setCommentDialogs] = useState({});
+  const [commentForms, setCommentForms] = useState({});
 
   const fetchOrders = async () => {
     try {
-      const response = await fetch('http://localhost:3000/api/orders');
-      if (!response.ok) throw new Error('Failed to fetch orders');
-      const data = await response.json();
-      setOrders(data);
+      const { data, error } = await supabase
+        .from('orders')
+        .select('order_id, order_name, order_year')
+        .order('order_id', { ascending: false })
+
+      if (error) throw error
+
+      // Group by year as before
+      const grouped = data.reduce((acc, order) => {
+        const year = new Date(order.order_year, 0).getFullYear()
+        if (!acc[year]) {
+          acc[year] = {
+            year,
+            orders: []
+          }
+        }
+        acc[year].orders.push({
+          id: order.order_id,
+          name: order.order_name
+        })
+        return acc
+      }, {})
+
+      setOrders(Object.values(grouped))
     } catch (error) {
-      console.error('Error fetching orders:', error);
+      console.error('Error fetching orders:', error)
     }
-  };
+  }
 
   const fetchArticles = async (orderId) => {
     try {
-      const response = await fetch(`http://localhost:3000/api/articles/${orderId}`);
-      if (!response.ok) throw new Error('Failed to fetch articles');
-      const data = await response.json();
-      setArticles(data);
+      const { data, error } = await supabase
+        .from('articles')
+        .select(`
+          article_id,
+          article_number,
+          article_title,
+          category,
+          word_count,
+          first_paragraph
+        `)
+        .eq('order_id', orderId)
+        .order('article_id', { ascending: true })  // Sort by article_id instead
+  
+      if (error) throw error
+      setArticles(data)
     } catch (error) {
-      console.error('Error fetching articles:', error);
+      console.error('Error fetching articles:', error)
     }
-  };
+  }
 
   const fetchSimilarities = async (articleId) => {
     try {
-      const response = await fetch(`http://localhost:3000/api/similarities/${articleId}`);
-      if (!response.ok) throw new Error('Failed to fetch similarities');
-      const data = await response.json();
-      setSimilarities(data);
+      const { data, error } = await supabase
+        .from('similarities')
+        .select(`
+          id,
+          similarity_score,
+          target_articles:articles!target_article_id (
+            article_number,
+            article_title,
+            first_paragraph,
+            category,
+            word_count,
+            url
+          ),
+          orders!target_order_id (
+            order_name,
+            order_id
+          ),
+          article_comments (
+            comment,
+            user_name
+          )
+        `)
+        .eq('source_article_id', articleId);
+  
+      if (error) throw error;
+  
+      const transformedData = data.map(item => ({
+        similarity_id: item.id,
+        similarity: item.similarity_score,
+        ...item.target_articles,
+        order_name: item.orders.order_name,
+        order_id: item.orders.order_id,
+        comment: item.article_comments?.[0]?.comment || null,
+        user_name: item.article_comments?.[0]?.user_name || null
+      }));
+  
+      setSimilarities(transformedData);
     } catch (error) {
       console.error('Error fetching similarities:', error);
     }
@@ -57,6 +134,43 @@ const OrderBrowser = () => {
       key,
       direction: sortConfig.key === key && sortConfig.direction === 'desc' ? 'asc' : 'desc'
     });
+  };
+
+  const handleCommentSubmit = async (similarityId) => {
+    try {
+      const formData = commentForms[similarityId];
+      if (!formData?.userName?.trim() || !formData?.comment?.trim()) {
+        alert("Please provide both your name and a comment");
+        return;
+      }
+  
+      const { error } = await supabase
+        .from('article_comments')
+        .upsert({
+          similarity_id: similarityId,
+          user_name: formData.userName.trim(),
+          comment: formData.comment.trim()
+        }, {
+          onConflict: 'similarity_id'
+        });
+  
+      if (error) throw error;
+  
+      // Close dialog and refresh similarities
+      setCommentDialogs(prev => ({
+        ...prev,
+        [similarityId]: false
+      }));
+      
+      // Refresh similarities to show new comment
+      if (selectedArticle) {
+        fetchSimilarities(selectedArticle);
+      }
+  
+    } catch (error) {
+      console.error('Error saving comment:', error);
+      alert('Failed to save comment. Please try again.');
+    }
   };
 
   useEffect(() => {
@@ -283,66 +397,134 @@ const OrderBrowser = () => {
                 </div>
 
                 <div className="space-y-4">
-                  {sortedSimilarities.map(item => (
-                    <Card 
-                      key={item.similarity_id} 
-                      className={`p-4 cursor-pointer ${
-                        selectedComparisonArticles.has(item.similarity_id)
-                          ? 'border-blue-500'
-                          : ''
-                      }`}
-                      onClick={(e) => handleSimilarArticleClick(item, e)}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <div className="font-medium">
-                            <a 
-                              href={item.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:text-blue-800 hover:underline"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              {item.order_name} - Article {item.article_number}
-                            </a>
-                          </div>
-                          <div className="text-sm text-gray-500">{item.article_title}</div>
-                          <div className="mt-2 text-sm">{item.first_paragraph}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-bold text-lg">
-                            {(item.similarity).toFixed(2)}%
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const newComments = { ...comments };
-                              newComments[item.similarity_id] = newComments[item.similarity_id] || '';
-                              setComments(newComments);
-                            }}
+                {sortedSimilarities.map(item => (
+                  <Card 
+                    key={item.similarity_id} 
+                    className={`p-4 cursor-pointer ${
+                      selectedComparisonArticles.has(item.similarity_id)
+                        ? 'border-blue-500'
+                        : ''
+                    }`}
+                    onClick={(e) => handleSimilarArticleClick(item, e)}
+                  >
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-medium">
+                          <a 
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800 hover:underline"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            <MessageSquare className="h-4 w-4" />
-                          </Button>
+                            {item.order_name} - Article {item.article_number}
+                          </a>
+                        </div>
+                        <div className="text-sm text-gray-500">{item.article_title}</div>
+                        <div className="mt-2 text-sm">{item.first_paragraph}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-lg">
+                          {(item.similarity).toFixed(2)}%
+                        </div>
+                        <Dialog 
+                          open={commentDialogs[item.similarity_id]}
+                          onOpenChange={(open) => {
+                            setCommentDialogs(prev => ({
+                              ...prev,
+                              [item.similarity_id]: open
+                            }));
+                            if (open) {
+                              setCommentForms(prev => ({
+                                ...prev,
+                                [item.similarity_id]: {
+                                  userName: item.user_name || '',
+                                  comment: item.comment || ''
+                                }
+                              }));
+                            }
+                          }}
+                        >
+                          <DialogTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                              }}
+                            >
+                              <MessageSquare className="h-4 w-4" />
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent className="sm:max-w-[425px]">
+                            <DialogHeader>
+                              <DialogTitle>Add Comment</DialogTitle>
+                            </DialogHeader>
+                            <div className="grid gap-4 py-4">
+                              <div className="grid gap-2">
+                                <Label htmlFor="name">Your Name</Label>
+                                <Input
+                                  id="name"
+                                  value={commentForms[item.similarity_id]?.userName || ''}
+                                  onChange={(e) => setCommentForms(prev => ({
+                                    ...prev,
+                                    [item.similarity_id]: {
+                                      ...prev[item.similarity_id],
+                                      userName: e.target.value
+                                    }
+                                  }))}
+                                  className="col-span-3"
+                                />
+                              </div>
+                              <div className="grid gap-2">
+                                <Label htmlFor="comment">Comment</Label>
+                                <Textarea
+                                  id="comment"
+                                  value={commentForms[item.similarity_id]?.comment || ''}
+                                  onChange={(e) => setCommentForms(prev => ({
+                                    ...prev,
+                                    [item.similarity_id]: {
+                                      ...prev[item.similarity_id],
+                                      comment: e.target.value
+                                    }
+                                  }))}
+                                  className="col-span-3"
+                                />
+                              </div>
+                            </div>
+                            <div className="flex justify-end gap-3">
+                              <Button
+                                variant="outline"
+                                onClick={() => setCommentDialogs(prev => ({
+                                  ...prev,
+                                  [item.similarity_id]: false
+                                }))}
+                              >
+                                Cancel
+                              </Button>
+                              <Button 
+                                onClick={() => handleCommentSubmit(item.similarity_id)}
+                              >
+                                Save Comment
+                              </Button>
+                            </div>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
+                    </div>
+                    {item.comment && (
+                      <div className="mt-4 p-3 bg-gray-50 rounded-md">
+                        <div className="text-sm font-medium text-gray-500">
+                          Comment by {item.user_name}:
+                        </div>
+                        <div className="mt-1 text-sm">
+                          {item.comment}
                         </div>
                       </div>
-                      {comments[item.similarity_id] !== undefined && (
-                        <div className="mt-4">
-                          <Input
-                            value={comments[item.similarity_id]}
-                            onChange={(e) => {
-                              const newComments = { ...comments };
-                              newComments[item.similarity_id] = e.target.value;
-                              setComments(newComments);
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            placeholder="Add a comment..."
-                          />
-                        </div>
-                      )}
-                    </Card>
-                  ))}
+                    )}
+                  </Card>
+                ))}
+
                 </div>
               </div>
             )}
